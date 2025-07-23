@@ -8,8 +8,8 @@ from sqlalchemy import pool
 from alembic import context
 
 # This line adds your project's root directory to the Python path.
-# It's necessary so Alembic can find your 'models.py' file.
-sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..')))
+# It's necessary so Alembic can find your other project files.
+sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
 
 # this is the Alembic Config object, which provides
@@ -23,9 +23,12 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-# This is the most important change: we import the 'Base' from your models
-# and set target_metadata so Alembic knows about your tables.
-from models import Base
+# Import the Base from its new location
+from database.database import Base
+# Import all your models so Alembic can see them
+from database.models import user, phone_verification
+
+# Set the target_metadata for Alembic's autogenerate support
 target_metadata = Base.metadata
 
 

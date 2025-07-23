@@ -1,17 +1,22 @@
-# api/routers/auth.py
+# src/routes/auth.py
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
-# Import everything from your project files
-from database import get_db
-import models
-import schemas
+# Corrected imports to point to the specific model files
+from database.database import get_db
+from database.models.user import User, UserToken
+from database.models.phone_verification import PhoneVerification
+from src import schemas
+from src.services.otp_service import generate_otp
+from src.utils.security_utils import (
+    hash_value,
+    verify_hash,
+    create_access_token,
+    create_refresh_token,
+)
 from config import settings
-
-# We will create this security.py file next
-import security
 
 router = APIRouter(
     prefix="/api/auth",
@@ -24,23 +29,22 @@ def start_phone_verification(request: schemas.PhoneVerificationStartRequest, db:
     Starts the phone verification process for signup.
     Checks if phone already exists. If not, creates a verification session.
     """
-    existing_user = db.query(models.User).filter(models.User.phone == request.phone).first()
+    existing_user = db.query(User).filter(User.phone == request.phone).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"success": False, "error": "PHONE_EXISTS", "message": "Phone number already registered"}
         )
 
-    # In a real app, generate a real OTP and send it via SMS (e.g., using Twilio)
-    otp = security.generate_otp()
+    otp = generate_otp()
     session_id = f"sess_{uuid.uuid4().hex}"
     expires_at = datetime.utcnow() + timedelta(minutes=10)
 
-    new_session = models.PhoneVerification(
+    new_session = PhoneVerification(
         session_id=session_id,
         phone=request.phone,
         session_type='signup',
-        otp_hash=security.hash_value(otp),
+        otp_hash=hash_value(otp),
         expires_at=expires_at
     )
     db.add(new_session)
@@ -63,12 +67,12 @@ def verify_otp(request: schemas.OTPVerifyRequest, db: Session = Depends(get_db))
     """
     Verifies the OTP provided by the user.
     """
-    session = db.query(models.PhoneVerification).filter(models.PhoneVerification.session_id == request.sessionId).first()
+    session = db.query(PhoneVerification).filter(PhoneVerification.session_id == request.sessionId).first()
 
     if not session or session.expires_at < datetime.utcnow() or session.is_verified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired session")
 
-    if not security.verify_hash(request.otp, session.otp_hash):
+    if not verify_hash(request.otp, session.otp_hash):
         session.attempts += 1
         db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP")
@@ -84,12 +88,12 @@ def complete_profile(request: schemas.CompleteProfileRequest, db: Session = Depe
     """
     Completes user profile after OTP verification and creates the user account.
     """
-    session = db.query(models.PhoneVerification).filter(models.PhoneVerification.session_id == request.sessionId).first()
+    session = db.query(PhoneVerification).filter(PhoneVerification.session_id == request.sessionId).first()
 
     if not session or not session.is_verified:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session not verified")
 
-    new_user = models.User(
+    new_user = User(
         name=request.name,
         phone=session.phone,
         is_phone_verified=True,
@@ -100,10 +104,10 @@ def complete_profile(request: schemas.CompleteProfileRequest, db: Session = Depe
     db.commit()
     db.refresh(new_user)
 
-    access_token = security.create_access_token(data={"sub": str(new_user.id)})
-    refresh_token_str, refresh_token_hash = security.create_refresh_token()
+    access_token = create_access_token(data={"sub": str(new_user.id)})
+    refresh_token_str, refresh_token_hash = create_refresh_token()
 
-    new_refresh_token = models.UserToken(
+    new_refresh_token = UserToken(
         user_id=new_user.id,
         refresh_token_hash=refresh_token_hash,
         expires_at=datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
